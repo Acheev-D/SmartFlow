@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartFlow: Fail-Safe Night Protocol</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #0b1120; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+        .glass-panel { background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        canvas#simCanvas { background: #1e293b; border-radius: 8px; position: relative; z-index: 1; }
+        
+        /* Night Overlay Layer */
+        #night-overlay { position: absolute; inset: 0; background: #000010; opacity: 0; pointer-events: none; z-index: 10; mix-blend-mode: multiply; transition: opacity 0.5s; }
+        
+        .sensor-active { box-shadow: 0 0 15px #3b82f6; border-color: #60a5fa !important; background: rgba(59, 130, 246, 0.2); }
+        .status-badge { transition: all 0.3s; }
+        
+        /* Slider Styling */
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #38bdf8; cursor: pointer; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #334155; border-radius: 2px; }
+    </style>
+</head>
+<body class="flex h-screen w-screen p-2 gap-2 text-xs">
+
+    <!-- LEFT: SIMULATION -->
+    <div class="flex flex-col flex-1 gap-2 h-full relative">
+        
+        <!-- Header -->
+        <div class="glass-panel p-2 rounded flex justify-between items-center shrink-0 h-14 z-20">
+            <div class="flex items-center gap-3">
+                <div class="bg-blue-600 p-2 rounded text-white font-bold tracking-widest shadow-lg shadow-blue-900/50">SMARTFLOW</div>
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-gray-400">OPERATIONAL MODE</span>
+                    <span id="op-mode" class="text-emerald-400 font-bold tracking-wide">AI ADAPTIVE (VISION OK)</span>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <!-- Pedestrian Button -->
+                <button onclick="requestPedestrian()" id="btn-ped" class="px-4 py-1 bg-sky-900/40 border border-sky-600/50 text-sky-400 rounded hover:bg-sky-900/60 transition font-bold mr-2 flex items-center gap-2">
+                    <span>🚶</span> PEDESTRIAN CALL
+                </button>
+
+                <!-- Ambulance Button -->
+                <button onclick="dispatchAmbulance()" class="px-4 py-1 bg-red-900/40 border border-red-600/50 text-red-400 rounded hover:bg-red-900/60 transition font-bold animate-pulse mr-4">
+                    🚨 DISPATCH AMBULANCE
+                </button>
+
+                <div class="flex items-center gap-4 bg-slate-800/50 px-4 py-1 rounded-full border border-slate-700">
+                    <span class="text-gray-400">🕒 TIME:</span>
+                    <input type="range" id="time-slider" min="0" max="23.9" step="0.1" value="12" class="w-32" oninput="updateTime()">
+                    <span id="time-display" class="font-mono font-bold text-sky-300 w-16 text-right">12:00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Canvas Container -->
+        <div class="relative flex-1 rounded overflow-hidden border border-slate-700 bg-slate-900">
+            <canvas id="simCanvas" class="w-full h-full"></canvas>
+            
+            <!-- This div darkens the screen at night -->
+            <div id="night-overlay"></div>
+
+            <!-- Sensor Visuals (Bottom Left) -->
+            <div class="absolute bottom-4 left-4 flex flex-col gap-1 pointer-events-none z-30">
+                <div class="flex items-center gap-2 text-slate-500 text-[10px] font-mono mb-1">INDUCTIVE LOOPS</div>
+                <div class="flex items-center gap-2">
+                    <div id="sens-n" class="w-2 h-2 border border-slate-500 rounded-full transition-all"></div> <span>N-S Lane</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div id="sens-e" class="w-2 h-2 border border-slate-500 rounded-full transition-all"></div> <span>E-W Lane</span>
+                </div>
+            </div>
+            
+            <!-- Pedestrian Status Overlay -->
+            <div id="ped-signal" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 border border-white px-6 py-2 rounded-full z-30 flex items-center gap-3">
+                <div class="w-3 h-3 bg-white rounded-full animate-ping"></div>
+                <span class="text-white font-bold text-sm tracking-widest">WALK SIGNAL ACTIVE</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: DASHBOARD -->
+    <div class="w-80 flex flex-col gap-2 h-full z-20">
+        
+        <!-- Fail-Safe Log -->
+        <div class="glass-panel p-3 rounded flex flex-col h-1/2">
+            <h3 class="font-bold text-gray-400 mb-2 flex justify-between items-center">
+                <span>SYSTEM LOGS</span>
+                <div id="cam-status" class="flex items-center gap-1 text-[10px] text-emerald-400">
+                    <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div> CAMERAS ONLINE
+                </div>
+            </h3>
+            <div id="sys-log" class="flex-1 overflow-y-auto font-mono text-[10px] space-y-1 text-slate-300 p-2 bg-black/50 rounded border border-slate-800">
+                <div class="text-emerald-500">> System Boot.</div>
+                <div class="text-emerald-500">> AI Vision Module Loaded.</div>
+                <div class="text-emerald-500">> Watchdog Timer Active.</div>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="glass-panel p-3 rounded flex-1 flex flex-col">
+            <h3 class="font-bold text-gray-400 mb-2">EFFICIENCY METRICS</h3>
+            <div class="relative flex-1 bg-black/20 rounded mb-2">
+                <canvas id="flowChart"></canvas>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="bg-slate-800/50 p-2 rounded border border-slate-700">
+                    <div class="text-[10px] text-gray-500">VISIBILITY</div>
+                    <div class="text-xl font-bold text-white" id="stat-vis">100%</div>
+                </div>
+                <div class="bg-slate-800/50 p-2 rounded border border-slate-700">
+                    <div class="text-[10px] text-gray-500">TOTAL CARS</div>
+                    <div class="text-xl font-bold text-white" id="stat-cars">0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * SmartFlow v10.0: Final Hackathon Version
+         * ----------------------------------------
+         * Dynamic Pedestrian Timing:
+         * - Normal: 13s (780 frames)
+         * - Ambulance Detected: Reduced to 9s (540 frames)
+         */
+
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const logDiv = document.getElementById('sys-log');
+
+        // --- CONFIG ---
+        const CONFIG = {
+            currentTime: 12.0, 
+            isNight: false,
+            mode: 'AI', 
+            spawnRate: 0.04
+        };
+
+        // --- TRAFFIC PHASES ---
+        const PHASES = {
+            NS_GREEN: 0,
+            NS_YELLOW: 1,
+            ALL_RED_1: 2,
+            EW_GREEN: 3,
+            EW_YELLOW: 4,
+            ALL_RED_2: 5,
+            PED_WALK: 6 
+        };
+
+        // --- CHART INIT ---
+        let flowChart = null;
+        setTimeout(() => {
+            if(typeof Chart !== 'undefined') {
+                const ctxChart = document.getElementById('flowChart').getContext('2d');
+                flowChart = new Chart(ctxChart, {
+                    type: 'line',
+                    data: {
+                        labels: Array(15).fill(''),
+                        datasets: [{
+                            label: 'Flow',
+                            data: Array(15).fill(0),
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.4,
+                            pointRadius: 0,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { x: { display: false }, y: { display: false, min: 0, max: 20 } },
+                        animation: false
+                    }
+                });
+            }
+        }, 500);
+
+        // --- GEOMETRY ---
+        let CW, CH, CX, CY;
+        const ROAD_W = 100;
+        
+        function resize() {
+            if(!canvas.parentElement) return;
+            CW = canvas.width = canvas.parentElement.clientWidth;
+            CH = canvas.height = canvas.parentElement.clientHeight;
+            CX = CW / 2; CY = CH / 2;
+        }
+
+        // --- LOGGING ---
+        function sysLog(msg, type='info') {
+            const el = document.createElement('div');
+            const ts = new Date().toLocaleTimeString();
+            el.innerText = `[${ts.split(' ')[0]}] ${msg}`;
+            if(type==='warn') el.className = "text-yellow-400";
+            if(type==='crit') el.className = "text-red-400 font-bold bg-red-900/20 px-1 rounded";
+            if(type==='sys') el.className = "text-sky-400";
+            if(type==='ped') el.className = "text-white font-bold bg-sky-600/50 px-1 rounded";
+            logDiv.appendChild(el);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // --- TIME & VISIBILITY ---
+        function updateTime() {
+            const val = parseFloat(document.getElementById('time-slider').value);
+            CONFIG.currentTime = val;
+            
+            const h = Math.floor(val);
+            const m = Math.floor((val - h) * 60);
+            document.getElementById('time-display').innerText = `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}`;
+            
+            let visibility = 0;
+            if (val >= 6 && val <= 18) visibility = 100;
+            else if (val > 18 && val < 20) visibility = 100 - ((val - 18) * 50);
+            else if (val > 4 && val < 6) visibility = (val - 4) * 50;
+            else visibility = 10;
+            
+            const opacity = 1 - (visibility / 100);
+            document.getElementById('night-overlay').style.opacity = opacity * 0.85; 
+            document.getElementById('stat-vis').innerText = Math.floor(visibility) + "%";
+
+            checkFailSafe(visibility);
+        }
+
+        function checkFailSafe(vis) {
+            const THRESHOLD = 40; 
+            const modeLabel = document.getElementById('op-mode');
+            const camLabel = document.getElementById('cam-status');
+            
+            if (vis < THRESHOLD && CONFIG.mode === 'AI') {
+                CONFIG.mode = 'FIXED';
+                sysLog("VISIBILITY LOW. AI SUSPENDED.", "warn");
+                sysLog("FAIL-SAFE: SWITCHING TO FIXED TIMER.", "crit");
+                modeLabel.innerText = "⚠️ FIXED TIMER (LOW VISIBILITY)";
+                modeLabel.className = "text-yellow-400 font-bold tracking-wide animate-pulse";
+                camLabel.innerHTML = '<div class="w-2 h-2 bg-red-500 rounded-full"></div> BLIND/OFFLINE';
+                camLabel.className = "flex items-center gap-1 text-[10px] text-red-400";
+                if(flowChart) flowChart.data.datasets[0].borderColor = '#eab308';
+                
+            } else if (vis >= THRESHOLD && CONFIG.mode === 'FIXED') {
+                CONFIG.mode = 'AI';
+                sysLog("VISIBILITY RESTORED. AI RE-ENGAGED.", "sys");
+                modeLabel.innerText = "AI ADAPTIVE (VISION OK)";
+                modeLabel.className = "text-emerald-400 font-bold tracking-wide";
+                camLabel.innerHTML = '<div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div> CAMERAS ONLINE';
+                camLabel.className = "flex items-center gap-1 text-[10px] text-emerald-400";
+                if(flowChart) flowChart.data.datasets[0].borderColor = '#10b981';
+            }
+        }
+
+        // --- CARS ---
+        let cars = [];
+        
+        class Car {
+            constructor(dir, isEmerg = false) {
+                this.dir = dir;
+                this.isEmerg = isEmerg;
+                this.w = 18; this.h = 32;
+                this.speed = 0;
+                this.maxSpeed = isEmerg ? 6 : 4 + Math.random();
+                this.currentSpeed = this.maxSpeed;
+                this.color = isEmerg ? '#fff' : `hsl(${Math.random()*360}, 70%, 50%)`;
+                
+                if(dir==='N') { this.x = CX - ROAD_W/4; this.y = -50; }
+                if(dir==='S') { this.x = CX + ROAD_W/4; this.y = CH + 50; }
+                if(dir==='W') { this.x = -50; this.y = CY + ROAD_W/4; }
+                if(dir==='E') { this.x = CW + 50; this.y = CY - ROAD_W/4; }
+            }
+
+            update() {
+                // Signal State Logic
+                let lightState = 'RED'; // RED by default
+                
+                // Pedestrian Phase -> All RED
+                if (traffic.phase === PHASES.PED_WALK) {
+                    lightState = 'RED';
+                } else if(this.dir === 'N' || this.dir === 'S') {
+                    if (traffic.phase === PHASES.NS_GREEN) lightState = 'GREEN';
+                    else if (traffic.phase === PHASES.NS_YELLOW) lightState = 'YELLOW';
+                } else {
+                    if (traffic.phase === PHASES.EW_GREEN) lightState = 'GREEN';
+                    else if (traffic.phase === PHASES.EW_YELLOW) lightState = 'YELLOW';
+                }
+
+                // Stop Line Logic
+                let stopLine = 0;
+                if(this.dir==='N') stopLine = CY - ROAD_W/2 - 10;
+                if(this.dir==='S') stopLine = CY + ROAD_W/2 + 10;
+                if(this.dir==='W') stopLine = CX - ROAD_W/2 - 10;
+                if(this.dir==='E') stopLine = CX + ROAD_W/2 + 10;
+
+                let dist = 999;
+                if(this.dir==='N') dist = stopLine - this.y;
+                if(this.dir==='S') dist = this.y - stopLine;
+                if(this.dir==='W') dist = stopLine - this.x;
+                if(this.dir==='E') dist = this.x - stopLine;
+
+                let target = this.maxSpeed;
+
+                // --- Safety Logic ---
+                if (dist > 0 && dist < 200) {
+                    // Approaching intersection
+                    if (lightState === 'RED') {
+                        if (dist < 20) target = 0; // Hard Stop
+                        else target = Math.min(this.maxSpeed, dist * 0.05); // Slow down
+                    } 
+                    else if (lightState === 'YELLOW') {
+                        // Dilemma Zone: If too close (dist < 60), SPEED UP to clear. Else Stop.
+                        if (dist < 60) target = this.maxSpeed * 1.2;
+                        else target = Math.min(this.maxSpeed, dist * 0.05);
+                    }
+                } else if (dist <= 0) {
+                    // Inside Intersection: NEVER STOP. Clear the box.
+                    target = this.maxSpeed;
+                }
+
+                // Collision Logic (Don't hit car in front)
+                let carDist = 999;
+                cars.forEach(c => {
+                    if (c === this || c.dir !== this.dir) return;
+                    let d = 999;
+                    if(this.dir==='N' && c.y > this.y) d = c.y - this.y;
+                    if(this.dir==='S' && c.y < this.y) d = this.y - c.y;
+                    if(this.dir==='W' && c.x > this.x) d = c.x - this.x;
+                    if(this.dir==='E' && c.x < this.x) d = this.x - c.x;
+                    if (d < carDist) carDist = d;
+                });
+
+                if (carDist < 50) {
+                    target = 0;
+                } else if (carDist < 100) {
+                    target = Math.min(target, this.maxSpeed * 0.5);
+                }
+
+                // Physics
+                if (this.currentSpeed < target) this.currentSpeed += 0.1;
+                else this.currentSpeed *= 0.8; // Brake
+
+                if (this.dir === 'N') this.y += this.currentSpeed;
+                if (this.dir === 'S') this.y -= this.currentSpeed;
+                if (this.dir === 'W') this.x += this.currentSpeed;
+                if (this.dir === 'E') this.x -= this.currentSpeed;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                if(this.dir==='W' || this.dir==='E') ctx.rotate(Math.PI/2);
+                
+                ctx.fillStyle = this.color;
+                
+                // Ambulance Flashing
+                if(this.isEmerg) {
+                    if (Math.floor(Date.now() / 150) % 2 === 0) ctx.fillStyle = '#ef4444';
+                    else ctx.fillStyle = '#3b82f6';
+                }
+
+                ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h);
+
+                // Headlights
+                if (CONFIG.currentTime < 6 || CONFIG.currentTime > 18) {
+                    ctx.fillStyle = '#ffffb0';
+                    ctx.globalAlpha = 0.4;
+                    ctx.beginPath();
+                    ctx.moveTo(-6, -this.h/2);
+                    ctx.lineTo(-20, -120); 
+                    ctx.lineTo(20, -120);
+                    ctx.lineTo(6, -this.h/2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                }
+                
+                // Brake lights
+                if (this.currentSpeed < 0.1) {
+                    ctx.fillStyle = 'red';
+                    ctx.shadowBlur = 10; ctx.shadowColor = 'red';
+                    ctx.fillRect(-this.w/2, this.h/2-2, this.w, 2);
+                    ctx.shadowBlur = 0;
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // --- TRAFFIC LOGIC ---
+        const traffic = {
+            phase: PHASES.NS_GREEN,
+            timer: 0,
+            stats: { cars: 0 },
+            pedRequest: false
+        };
+
+        function updateLogic() {
+            traffic.timer++;
+
+            // Watchdog (If stuck for 60s)
+            if (traffic.timer > 3600) {
+                sysLog("WATCHDOG: SYSTEM FROZEN. REBOOTING.", "crit");
+                switchPhase(PHASES.ALL_RED_1); // Safe Reset
+            }
+
+            // 1. COUNT CARS
+            let nsCount = 0, ewCount = 0;
+            let emergDir = null;
+            let sN=false, sE=false;
+
+            cars.forEach(c => {
+                if(c.dir==='N'||c.dir==='S') {
+                    nsCount++;
+                    if(Math.abs(c.y-CY)<CH/2) sN=true;
+                    if(c.isEmerg) emergDir = 'NS';
+                } else {
+                    ewCount++;
+                    if(Math.abs(c.x-CX)<CW/2) sE=true;
+                    if(c.isEmerg) emergDir = 'EW';
+                }
+            });
+
+            // Sensors UI
+            if (CONFIG.mode === 'AI') {
+                document.getElementById('sens-n').className = sN ? "w-2 h-2 border border-blue-400 bg-blue-500 rounded-full shadow-[0_0_10px_blue]" : "w-2 h-2 border border-slate-500 rounded-full";
+                document.getElementById('sens-e').className = sE ? "w-2 h-2 border border-blue-400 bg-blue-500 rounded-full shadow-[0_0_10px_blue]" : "w-2 h-2 border border-slate-500 rounded-full";
+            } else {
+                document.getElementById('sens-n').className = "w-2 h-2 bg-red-900 rounded-full";
+                document.getElementById('sens-e').className = "w-2 h-2 bg-red-900 rounded-full";
+            }
+
+            // Chart
+            if (traffic.timer % 30 === 0 && flowChart) {
+                const efficiency = CONFIG.mode === 'AI' ? (nsCount + ewCount) : (nsCount + ewCount) * 0.6;
+                flowChart.data.datasets[0].data.push(efficiency);
+                flowChart.data.datasets[0].data.shift();
+                flowChart.update();
+                document.getElementById('stat-cars').innerText = traffic.stats.cars;
+            }
+
+            // --- 2. SWITCHING LOGIC (State Machine) ---
+            
+            const YELLOW_TIME = 180; // 3 sec
+            const ALL_RED_TIME = 120; // 2 sec
+            const MIN_GREEN = 300; // 5 sec
+            const MAX_GREEN = 900; // 15 sec - Force switch for saturated flow
+            
+            // TIMING CONFIG (60fps)
+            const PED_WALK_NORMAL = 780; // 13s
+            const PED_WALK_EMERGENCY = 540; // 9s
+
+            // EMERGENCY LOGIC (Overrides Timer)
+            if (emergDir) {
+                // *** PEDESTRIAN SAFETY OVERRIDE ***
+                if (traffic.phase === PHASES.PED_WALK) {
+                    // DYNAMIC REDUCTION: Allow up to 9s (540 frames) only
+                    if (traffic.timer < PED_WALK_EMERGENCY) {
+                        if(traffic.timer % 60 === 0) sysLog("🚑 AMBULANCE DETECTED. REDUCING WALK TIME TO 9s.", "warn");
+                        return; // Continue walking until 9s
+                    } else {
+                        // 9s passed, clear the road
+                        if (emergDir === 'NS') switchPhase(PHASES.ALL_RED_2); 
+                        else switchPhase(PHASES.ALL_RED_1); 
+                        return;
+                    }
+                }
+
+                // Standard Ambulance Logic
+                if (emergDir === 'NS') {
+                     if (traffic.phase === PHASES.EW_GREEN && traffic.timer > 60) switchPhase(PHASES.EW_YELLOW);
+                     if ((traffic.phase === PHASES.EW_YELLOW || traffic.phase === PHASES.ALL_RED_2) && traffic.timer > 30) nextPhase();
+                } else {
+                     if (traffic.phase === PHASES.NS_GREEN && traffic.timer > 60) switchPhase(PHASES.NS_YELLOW);
+                     if ((traffic.phase === PHASES.NS_YELLOW || traffic.phase === PHASES.ALL_RED_1) && traffic.timer > 30) nextPhase();
+                }
+                
+                // If Green in correct lane, hold it
+                if ((emergDir === 'NS' && traffic.phase === PHASES.NS_GREEN) || 
+                    (emergDir === 'EW' && traffic.phase === PHASES.EW_GREEN)) {
+                    traffic.timer = 0; // Prevent switching
+                }
+            }
+
+            // PEDESTRIAN LOGIC
+            if (traffic.pedRequest && !emergDir) {
+                if (traffic.phase === PHASES.NS_GREEN && traffic.timer > 100) switchPhase(PHASES.NS_YELLOW);
+                else if (traffic.phase === PHASES.EW_GREEN && traffic.timer > 100) switchPhase(PHASES.EW_YELLOW);
+                
+                // If at All Red, intercept and go to Pedestrian Phase
+                // REFLEX BUFFER: Wait 1.5s (90 frames) before turning on Walk Signal
+                if ((traffic.phase === PHASES.ALL_RED_1 || traffic.phase === PHASES.ALL_RED_2) && traffic.timer > 90) {
+                    switchPhase(PHASES.PED_WALK);
+                }
+            }
+
+            // STANDARD LOGIC
+            
+            if (traffic.phase === PHASES.NS_GREEN) {
+                let shouldSwitch = false;
+                if (traffic.timer > MIN_GREEN) {
+                    if (CONFIG.mode === 'AI') {
+                        if (ewCount > nsCount * 1.2) shouldSwitch = true;
+                        if (traffic.timer > MAX_GREEN && ewCount > 0) shouldSwitch = true;
+                    } else {
+                        // Fixed Timer
+                        if (traffic.timer > 500) shouldSwitch = true;
+                    }
+                }
+                if (shouldSwitch) switchPhase(PHASES.NS_YELLOW);
+            }
+            else if (traffic.phase === PHASES.NS_YELLOW) {
+                if (traffic.timer > YELLOW_TIME) nextPhase();
+            }
+            else if (traffic.phase === PHASES.ALL_RED_1) {
+                if (traffic.timer > ALL_RED_TIME) nextPhase(); 
+            }
+            else if (traffic.phase === PHASES.EW_GREEN) {
+                let shouldSwitch = false;
+                if (traffic.timer > MIN_GREEN) {
+                    if (CONFIG.mode === 'AI') {
+                        if (nsCount > ewCount * 1.2) shouldSwitch = true;
+                        if (traffic.timer > MAX_GREEN && nsCount > 0) shouldSwitch = true;
+                    } else {
+                        if (traffic.timer > 500) shouldSwitch = true;
+                    }
+                }
+                if (shouldSwitch) switchPhase(PHASES.EW_YELLOW);
+            }
+            else if (traffic.phase === PHASES.EW_YELLOW) {
+                if (traffic.timer > YELLOW_TIME) nextPhase();
+            }
+            else if (traffic.phase === PHASES.ALL_RED_2) {
+                if (traffic.timer > ALL_RED_TIME) nextPhase(); 
+            }
+            else if (traffic.phase === PHASES.PED_WALK) {
+                // NORMAL WALK: 13s
+                if (traffic.timer > PED_WALK_NORMAL) {
+                    traffic.pedRequest = false; 
+                    document.getElementById('btn-ped').classList.remove('ring-4', 'ring-sky-500');
+                    switchPhase(PHASES.ALL_RED_2); 
+                }
+            }
+        }
+
+        function switchPhase(newP) {
+            traffic.phase = newP;
+            traffic.timer = 0;
+            const msgs = ["NS GREEN", "NS YELLOW", "CLEARING...", "EW GREEN", "EW YELLOW", "CLEARING...", "PEDESTRIAN WALK"];
+            sysLog(`Phase Change: ${msgs[newP]}`, newP === PHASES.PED_WALK ? 'ped' : 'info');
+            
+            // Update Ped UI
+            const pedSignal = document.getElementById('ped-signal');
+            if (newP === PHASES.PED_WALK) pedSignal.classList.remove('hidden');
+            else pedSignal.classList.add('hidden');
+        }
+
+        function nextPhase() {
+            let next = traffic.phase + 1;
+            
+            // Safety loop
+            if (traffic.phase === PHASES.ALL_RED_1) next = PHASES.EW_GREEN; 
+            if (traffic.phase === PHASES.ALL_RED_2) next = PHASES.NS_GREEN;
+            if (traffic.phase === PHASES.PED_WALK) next = PHASES.ALL_RED_2; // Safe exit from Ped mode
+            
+            // Catch-all for undefined phases (The Crash Fix)
+            if (next > 6 || next < 0) next = PHASES.ALL_RED_1;
+
+            switchPhase(next);
+        }
+
+        // --- DRAWING ---
+        function drawEnv() {
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(CX - ROAD_W/2, 0, ROAD_W, CH);
+            ctx.fillRect(0, CY - ROAD_W/2, CW, ROAD_W);
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(CX - ROAD_W/2, CY - ROAD_W/2, ROAD_W, ROAD_W);
+            
+            // Crosswalks
+            ctx.fillStyle = '#cbd5e1';
+            const stripeW = 6; const gap = 12;
+            for(let i = CX - ROAD_W/2 + 4; i < CX + ROAD_W/2 - 4; i+=gap) ctx.fillRect(i, CY - ROAD_W/2 - 24, stripeW, 14); // N
+            for(let i = CX - ROAD_W/2 + 4; i < CX + ROAD_W/2 - 4; i+=gap) ctx.fillRect(i, CY + ROAD_W/2 + 10, stripeW, 14); // S
+            for(let i = CY - ROAD_W/2 + 4; i < CY + ROAD_W/2 - 4; i+=gap) ctx.fillRect(CX - ROAD_W/2 - 24, i, 14, stripeW); // W
+            for(let i = CY - ROAD_W/2 + 4; i < CY + ROAD_W/2 - 4; i+=gap) ctx.fillRect(CX + ROAD_W/2 + 10, i, 14, stripeW); // E
+
+            // Streetlights
+            if (CONFIG.currentTime < 6 || CONFIG.currentTime > 18) {
+                const drawLamp = (x, y) => {
+                    const grad = ctx.createRadialGradient(x, y, 0, x, y, 60);
+                    grad.addColorStop(0, 'rgba(255, 200, 100, 0.4)');
+                    grad.addColorStop(1, 'rgba(255, 200, 100, 0)');
+                    ctx.fillStyle = grad;
+                    ctx.beginPath(); ctx.arc(x, y, 60, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#ffeda0';
+                    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+                };
+                drawLamp(CX - ROAD_W/2 - 20, CY - ROAD_W/2 - 20);
+                drawLamp(CX + ROAD_W/2 + 20, CY + ROAD_W/2 + 20);
+                drawLamp(CX - ROAD_W/2 - 20, CY + ROAD_W/2 + 20);
+                drawLamp(CX + ROAD_W/2 + 20, CY - ROAD_W/2 - 20);
+            }
+        }
+
+        function drawLights() {
+            let cNS = '#331111', cEW = '#331111';
+            
+            // Map Phase to Colors
+            if (traffic.phase === PHASES.NS_GREEN) cNS = '#22c55e'; 
+            else if (traffic.phase === PHASES.NS_YELLOW) cNS = '#eab308'; 
+            else cNS = '#ef4444'; 
+
+            if (traffic.phase === PHASES.EW_GREEN) cEW = '#22c55e';
+            else if (traffic.phase === PHASES.EW_YELLOW) cEW = '#eab308';
+            else cEW = '#ef4444';
+            
+            if (traffic.phase === PHASES.PED_WALK) { cNS = '#ef4444'; cEW = '#ef4444'; }
+
+            const drawHead = (x, y, c) => {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x-5, y-5, 10, 10);
+                ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2);
+                ctx.fillStyle = c;
+                if(c!=='#331111') { ctx.shadowColor=c; ctx.shadowBlur=15; }
+                ctx.fill(); ctx.shadowBlur=0;
+            };
+
+            drawHead(CX + ROAD_W/2 + 10, CY + ROAD_W/2 + 10, cNS);
+            drawHead(CX - ROAD_W/2 - 10, CY - ROAD_W/2 - 10, cNS);
+            drawHead(CX - ROAD_W/2 - 10, CY + ROAD_W/2 + 10, cEW);
+            drawHead(CX + ROAD_W/2 + 10, CY - ROAD_W/2 - 10, cEW);
+        }
+
+        function spawner() {
+            if (Math.random() < CONFIG.spawnRate) {
+                const dirs = ['N', 'S', 'E', 'W'];
+                const d = dirs[Math.floor(Math.random()*4)];
+                
+                let blocked = false;
+                cars.forEach(c => {
+                    if (c.dir !== d) return;
+                    let dist = 0;
+                    if(d==='N') dist = c.y - (-50);
+                    if(d==='S') dist = (CH+50) - c.y;
+                    if(d==='W') dist = c.x - (-50);
+                    if(d==='E') dist = (CW+50) - c.x;
+                    if (dist < 40) blocked = true;
+                });
+
+                if (!blocked) {
+                    cars.push(new Car(d));
+                    traffic.stats.cars++;
+                }
+            }
+        }
+
+        function loop() {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, CW, CH);
+
+            drawEnv();
+            drawLights();
+            updateLogic();
+            spawner();
+
+            for (let i = cars.length - 1; i >= 0; i--) {
+                const c = cars[i];
+                c.update();
+                c.draw();
+                if(c.x < -100 || c.x > CW+100 || c.y < -100 || c.y > CH+100) cars.splice(i, 1);
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        // --- GLOBAL FUNCS ---
+        window.dispatchAmbulance = () => {
+            const dirs = ['N', 'S', 'E', 'W'];
+            const d = dirs[Math.floor(Math.random()*4)];
+            cars.push(new Car(d, true));
+            sysLog("MANUAL DISPATCH: AMBULANCE EN ROUTE.", "crit");
+        };
+        
+        window.requestPedestrian = () => {
+            traffic.pedRequest = true;
+            sysLog("PEDESTRIAN SIGNAL REQUESTED.", "ped");
+            document.getElementById('btn-ped').classList.add('ring-4', 'ring-sky-500');
+        };
+
+        window.addEventListener('resize', resize);
+        
+        // Start
+        setTimeout(() => {
+            resize();
+            updateTime();
+            sysLog("Init Complete. Ready.", "sys");
+            loop();
+        }, 100);
+
+    </script>
+</body>
+</html>
